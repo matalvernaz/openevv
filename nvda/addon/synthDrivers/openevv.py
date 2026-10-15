@@ -125,6 +125,17 @@ def _endsSentence(text):
 	return "." not in word and not (len(word) <= 3 and word[:1].isupper())
 
 
+def _flag(value):
+	"""A saved yes or no as the configuration file may hold it before NVDA has
+	checked it against the specification: a bool, or one of the words
+	ConfigObj's own as_bool takes, in any case. Anything else is no."""
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, str):
+		return value.strip().lower() in ("true", "yes", "on", "1")
+	return False
+
+
 class SynthDriver(SynthDriver):
 	name = "openevv"
 	description = "OpenEVV"
@@ -203,6 +214,9 @@ class SynthDriver(SynthDriver):
 		#: no dictionary is read; a change after it is the reader's, and is
 		#: answered.
 		self._settled = False
+		#: Whether NVDA is handing settings back right now, which is not the
+		#: reader changing one.
+		self._restoring = False
 		self._community = community.Updater()
 		#: The community's set, once the saved settings say whether to read it.
 		self._communityFolder = None
@@ -220,9 +234,69 @@ class SynthDriver(SynthDriver):
 		# as each setting came back, they were read, freed and read again, and
 		# freeing a large one is slow enough to silence the reader
 		# (upstream #49).
-		self._communityFolder = self._community.prepare(self._communityDictionaries)
+		#
+		# The community's box is the one setting not taken from what NVDA
+		# handed back, which came from whichever configuration profile is in
+		# force. The set is read once, here, and a start is always in the
+		# normal configuration, so the box is one setting for all of NVDA and
+		# the normal configuration's word is the one used: here, and when
+		# Cancel puts it back, and OK writes the reader's choice there.
+		wanted = self._savedCommunity()
+		self._communityDictionaries = wanted
+		# The look a start takes on its own, saying nothing, before the set is
+		# put in place, so that a download already done is used from this
+		# start, as when NVDA handing the setting back started it.
+		self._community.want(wanted, False)
+		self._communityFolder = self._community.prepare(wanted)
 		self._settled = True
 		self._applyDictionaries()
+
+	def loadSettings(self, onlyChanged=False):
+		"""NVDA handing settings back: at a start, on Cancel in its settings,
+		and whenever a configuration profile comes into force or goes, when
+		only what differs is handed back."""
+		restoring = self._restoring
+		self._restoring = True
+		try:
+			super().loadSettings(onlyChanged)
+		finally:
+			self._restoring = restoring
+		if self._settled and not onlyChanged:
+			# Cancel puts every setting back as it was saved, and the box goes
+			# back as the normal configuration has it, answered as the reader
+			# changing it back by hand would be. A profile coming into force or
+			# going leaves it alone.
+			self._changeCommunity(self._savedCommunity())
+
+	def saveSettings(self):
+		super().saveSettings()
+		# NVDA has written every setting into the configuration being edited,
+		# which is a profile when one is in force. The box is read from the
+		# normal configuration, so it is written there too; NVDA writes that
+		# file whenever it saves.
+		self._keepCommunity()
+
+	def _savedCommunity(self):
+		"""What the normal configuration says about the box, whatever profile
+		is in force: read from the normal configuration itself, since
+		config.conf answers from the profile."""
+		try:
+			import config
+
+			section = config.conf.profiles[0].get("speech", {}).get(self.name, {})
+			return _flag(section.get("communityDictionaries"))
+		except Exception:  # noqa: BLE001
+			log.error("openevv: could not read the community dictionaries' setting", exc_info=True)
+			return False
+
+	def _keepCommunity(self):
+		try:
+			import config
+
+			section = config.conf.profiles[0].setdefault("speech", {}).setdefault(self.name, {})
+			section["communityDictionaries"] = self._communityDictionaries
+		except Exception:  # noqa: BLE001
+			log.error("openevv: could not save the community dictionaries' setting", exc_info=True)
 
 	def terminate(self):
 		self._community.stop()
@@ -648,7 +722,13 @@ class SynthDriver(SynthDriver):
 		return self._communityDictionaries
 
 	def _set_communityDictionaries(self, enable):
-		enable = bool(enable)
+		if self._restoring:
+			# A profile's copy, or Cancel's, which loadSettings answers itself
+			# from the normal configuration.
+			return
+		self._changeCommunity(bool(enable))
+
+	def _changeCommunity(self, enable):
 		byReader = self._settled and enable != self._communityDictionaries
 		self._communityDictionaries = enable
 		# Never the folders the engine reads, which were settled when the

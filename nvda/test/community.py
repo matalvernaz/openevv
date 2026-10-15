@@ -133,12 +133,91 @@ PERSONAL = os.path.join(sequence.CONFIG, "eciDictionaries", "personal")
 OWN = os.path.join(sequence.CONFIG, "openevv")
 
 
+#: NVDA's configuration as the driver meets it (config/__init__.py): the
+#: normal configuration first in `profiles`, any profile in force after it.
+#: SAVED is the driver's own section of the normal configuration.
+BASE = {}
+CONF = sequence._Conf({"audio": {"outputDevice": "default"}})
+CONF.profiles = [BASE]
+
+_STUBS = sequence._install_stubs
+
+
+def _install_stubs():
+    """sequence's stand-ins, with the configuration these checks keep."""
+    _STUBS()
+    sys.modules["config"].conf = CONF
+
+
+sequence._install_stubs = _install_stubs
+
+
+def _section(profile, make=False):
+    """The driver's own section of one profile, where NVDA files it."""
+    if make:
+        return profile.setdefault("speech", {}).setdefault("openevv", {})
+    return profile.get("speech", {}).get("openevv", {})
+
+
+def _inForce(key):
+    """What NVDA's configuration answers for a key: the last profile in force
+    that holds it, and under them all the normal configuration."""
+    for profile in reversed(CONF.profiles):
+        section = _section(profile)
+        if key in section:
+            return section[key]
+    return None
+
+
 def _initSettings(self):
-    """NVDA's initSettings as the driver meets it: every saved setting is
-    handed to its setter, in the order the driver lists them."""
+    """NVDA's initSettings (synthDriverHandler.py:360-384): a first load
+    writes the defaults out, and any other hands back what was saved."""
+    if not any(_section(profile) for profile in CONF.profiles):
+        self.saveSettings()
+    else:
+        self.loadSettings()
+
+
+def _loadSettings(self, onlyChanged=False):
+    """NVDA's SynthDriver.loadSettings (synthDriverHandler.py:386-408): every
+    setting the configuration in force holds is handed to its setter, or
+    only those that differ from what the driver has."""
     for setting in self.supportedSettings:
-        if setting.id in SAVED:
-            setattr(self, setting.id, SAVED[setting.id])
+        value = _inForce(setting.id)
+        if value is None:
+            continue
+        if onlyChanged and getattr(self, setting.id) == value:
+            continue
+        setattr(self, setting.id, value)
+
+
+def _saveSettings(self):
+    """NVDA's saveSettings: every setting written into the configuration
+    being edited, which is the profile in force when there is one."""
+    section = _section(CONF.profiles[-1], make=True)
+    for setting in self.supportedSettings:
+        try:
+            value = getattr(self, setting.id)
+        except AttributeError:
+            # The stand-in engine has no sample rate to report; nothing
+            # these checks follow depends on one being saved.
+            continue
+        section[setting.id] = value
+
+
+def _enter(d, values):
+    """A profile coming into force: NVDA hands the synthesiser whatever in it
+    differs (synthDriverHandler.handlePostConfigProfileSwitch)."""
+    profile = {"speech": {"openevv": dict(values)}}
+    CONF.profiles.append(profile)
+    d.loadSettings(onlyChanged=True)
+    return profile
+
+
+def _leave(d):
+    """The profile going, handed over the same way."""
+    CONF.profiles.pop()
+    d.loadSettings(onlyChanged=True)
 
 
 def fresh(github=None):
@@ -153,6 +232,9 @@ def fresh(github=None):
     shutil.rmtree(ROOT, ignore_errors=True)
     del SAID[:]
     SAVED.clear()
+    BASE.clear()
+    BASE["speech"] = {"openevv": SAVED}
+    CONF.profiles[:] = [BASE]
     NOW[0] = 1_800_000_000.0
     github = github if github is not None else GitHub()
     community._get = github
@@ -169,6 +251,8 @@ def fresh(github=None):
     community._modalOpen = lambda: MODAL[0]
     community._askRestart = lambda: ASKED.append(True)
     sequence._SynthDriver.initSettings = _initSettings
+    sequence._SynthDriver.loadSettings = _loadSettings
+    sequence._SynthDriver.saveSettings = _saveSettings
     return github
 
 
@@ -851,6 +935,223 @@ def driver_checks():
           " reader is not asked to restart for this one", ASKED, [])
 
 
+# ---- configuration profiles ---------------------------------------------------
+
+
+def profile_checks():
+    """NVDA keeps a copy of every synthesiser setting in each configuration
+    profile and hands a profile's copy to the driver whenever the profile
+    comes into force or goes. The set is read once, at a start, and a start
+    is always in the normal configuration, so the box is one setting for all
+    of NVDA: a profile's copy is never taken, and OK writes the reader's
+    choice into the normal configuration whichever profile is being edited."""
+    github = fresh()
+    SAVED["communityDictionaries"] = False
+    d = driver()
+    before = list(folders(d))
+    _enter(d, {"communityDictionaries": True})
+    check("a profile that ticks the box coming into force downloads nothing",
+          github.asked, [])
+    check("says nothing and asks nothing", (SAID, ASKED), ([], []))
+    check("and the box stays as the normal configuration has it",
+          d.communityDictionaries, False)
+    _leave(d)
+    check("nor does anything happen as it goes", (github.asked, SAID, ASKED),
+          ([], [], []))
+    check("and the engine is never asked to read anything else",
+          folders(d), before)
+    d.terminate()
+
+    fresh()
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    SAVED["communityDictionaries"] = True
+    d = driver()
+    community.stage(ROOT, {"enuroot.dic": b"c\td\r\n"}, SECOND)
+    del SAID[:]
+    _enter(d, {"communityDictionaries": False})
+    check("a profile that unticks it coming into force says nothing", SAID, [])
+    check("and throws nothing waiting away", community.revisionOf(PENDING), SECOND)
+    _leave(d)
+    d.terminate()
+
+    # A driver made while a profile is in force, as when the reader changes
+    # synthesiser and back inside an application that has one.
+    fresh()
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    SAVED["communityDictionaries"] = True
+    CONF.profiles.append({"speech": {"openevv": {"communityDictionaries": False}}})
+    d = driver()
+    check("a driver made under a profile that unticks it reads what the"
+          " normal configuration asks for", folders(d), [(CURRENT, PERSONAL, OWN)])
+    d.terminate()
+
+    fresh()
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    SAVED["communityDictionaries"] = False
+    CONF.profiles.append({"speech": {"openevv": {"communityDictionaries": True}}})
+    d = driver()
+    check("and under one that ticks it, over a normal configuration that"
+          " does not, reads no set", folders(d), [(PERSONAL, OWN)])
+    d.terminate()
+
+    # Ticked and saved inside a profile, over a normal configuration that has
+    # never held the box: how a reader whose settings are saved in profiles
+    # meets it.
+    fresh()
+    SAVED["rate"] = 50
+    d = driver()
+    profile = _enter(d, {})
+    OPEN[0] = True
+    d.communityDictionaries = True
+    d.saveSettings()
+    OPEN[0] = False
+    check("OK inside a profile writes the box into the normal configuration"
+          " as well as the profile",
+          (SAVED.get("communityDictionaries"), _section(profile).get("communityDictionaries")),
+          (True, True))
+    tick()
+    check("and the reader is asked to restart once out of the settings", ASKED, [True])
+    d.terminate()
+    CONF.profiles.pop()
+    d = driver()
+    check("the next start reads the set", folders(d), [(CURRENT, PERSONAL, OWN)])
+    d.terminate()
+
+    # Only a driver made under a profile can find the normal configuration
+    # without a section of its own: at a start NVDA writes one first.
+    fresh()
+    BASE.clear()
+    CONF.profiles.append({"speech": {"openevv": {"rate": 50}}})
+    d = driver()
+    d.communityDictionaries = True
+    d.saveSettings()
+    check("OK inside a profile over a normal configuration with no section of"
+          " the driver's at all makes one",
+          _section(BASE).get("communityDictionaries"), True)
+    d.terminate()
+
+    # OK inside a profile whose own copy differs, with the box untouched.
+    fresh()
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    SAVED["communityDictionaries"] = True
+    d = driver()
+    profile = _enter(d, {"communityDictionaries": False})
+    d.saveSettings()
+    check("OK inside a profile with the box untouched keeps the normal"
+          " configuration's", SAVED["communityDictionaries"], True)
+    check("and makes the profile's copy agree with it",
+          _section(profile)["communityDictionaries"], True)
+    d.terminate()
+
+    # Cancel puts the box back as the normal configuration has it, not as the
+    # profile in force has it (gui/settingsDialogs.py: onDiscard hands every
+    # saved setting back).
+    fresh()
+    SAVED["communityDictionaries"] = False
+    d = driver()
+    _enter(d, {"communityDictionaries": True})
+    OPEN[0] = True
+    d.communityDictionaries = True
+    check("ticked inside the settings under that profile, it downloads",
+          community.revisionOf(PENDING), FIRST)
+    del SAID[:]
+    d.loadSettings()
+    OPEN[0] = False
+    tick()
+    check("Cancel puts the box back as the normal configuration has it",
+          d.communityDictionaries, False)
+    check("and throws the download away", community.revisionOf(PENDING), None)
+    check("saying so", len(heard("discarded")), 1)
+    check("and asks nothing", ASKED, [])
+    d.terminate()
+
+    # A profile coming into force while the reader has ticked the box and the
+    # settings are still open: the tick is not a profile's to undo.
+    fresh()
+    SAVED["communityDictionaries"] = False
+    d = driver()
+    OPEN[0] = True
+    d.communityDictionaries = True
+    _enter(d, {"communityDictionaries": False})
+    check("a profile coming into force before OK leaves the reader's tick alone",
+          (d.communityDictionaries, community.revisionOf(PENDING)), (True, FIRST))
+    d.saveSettings()
+    OPEN[0] = False
+    check("and OK then saves it", SAVED["communityDictionaries"], True)
+    d.terminate()
+
+    # The box as the normal configuration holds it after a restart, before
+    # NVDA has checked it against the driver's specification: the text read
+    # from the file.
+    fresh()
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    SAVED["communityDictionaries"] = "True"
+    d = driver()
+    check("saved as the text True it is ticked", folders(d), [(CURRENT, PERSONAL, OWN)])
+    d.terminate()
+
+    fresh()
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    SAVED["communityDictionaries"] = "False"
+    d = driver()
+    check("and as the text False it is not", folders(d), [(PERSONAL, OWN)])
+    d.terminate()
+
+    # The look a start takes on its own, which the setter used to start.
+    github = fresh()
+    SAVED["communityDictionaries"] = True
+    d = driver()
+    check("a start saved ticked, with nothing downloaded, fetches",
+          github.fetchedArchive(), True)
+    check("saying nothing and asking nothing", (SAID, ASKED), ([], []))
+    d.terminate()
+
+    github = fresh(GitHub(head=SECOND))
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    community.prepare(ROOT)
+    community._looked(ROOT)
+    NOW[0] += community.CHECK_EVERY + 1
+    SAVED["communityDictionaries"] = True
+    d = driver()
+    check("a start whose day is up fetches again", github.fetchedArchive(), True)
+    check("quietly", (SAID, ASKED), ([], []))
+    check("and the engine reads from the folders it always did",
+          folders(d), [(CURRENT, PERSONAL, OWN)])
+    d.terminate()
+
+    github = fresh()
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    community.prepare(ROOT)
+    community._looked(ROOT)
+    SAVED["communityDictionaries"] = True
+    d = driver()
+    check("a start that looked today does not look again", github.asked, [])
+    d.terminate()
+
+    # A setting that will not take while NVDA hands settings back.
+    fresh()
+    SAVED["communityDictionaries"] = False
+    d = driver()
+    cls = type(d)
+    real = cls.__dict__["_set_headSize"]
+
+    def refuse(self, value):
+        raise RuntimeError("a setting that will not take")
+
+    cls._set_headSize = refuse
+    try:
+        try:
+            _enter(d, {"headSize": 10})
+        except RuntimeError:
+            pass
+    finally:
+        cls._set_headSize = real
+    d.communityDictionaries = True
+    check("after a setting failed as NVDA handed it back, a tick is still the"
+          " reader's", (community.revisionOf(PENDING), len(heard(DOWNLOADED))), (FIRST, 1))
+    d.terminate()
+
+
 # ---- the real reader, against a real server ----------------------------------
 
 
@@ -904,6 +1205,7 @@ def main():
     unticked_checks()
     offer_checks()
     driver_checks()
+    profile_checks()
     restart_checks()
     network_checks()
 
