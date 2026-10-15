@@ -274,6 +274,20 @@ def validation_checks():
     finally:
         community.MAX_FILE, community.MAX_TOTAL = limits
 
+    # A file is checked a line at a time. Split into a list, a million short
+    # lines are a million objects held at once, ten times the file's size.
+    import tracemalloc
+
+    many = archive(files={"ENURoot.dic": b"a\tb\n" * 1_000_000})
+    tracemalloc.start()
+    try:
+        community.validate(many)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    check("a file of a million short lines is checked without holding a"
+          " million lines at once", peak < 24 * 1024 * 1024, True)
+
     blank = community.validate(archive(files=dict(GOOD, **{
         "ENUmain.dic": b"omg\toe em jee\r\n\r\ntabindex\tTab Index",
     })))
@@ -324,15 +338,31 @@ def prepare_checks():
           sorted(os.listdir(ROOT)), ["current"])
 
     community.stage(ROOT, {"enumain.dic": b"a\tb\r\n"}, FIRST)
-    community.requestRemoval(ROOT)
-    check("a set asked to go is gone at the next start, with anything"
-          " waiting to replace it",
-          (community.prepare(ROOT), os.listdir(ROOT)), (None, []))
+    check("a start whose saved setting is unticked takes the set away, with"
+          " anything waiting to replace it",
+          (community.prepare(ROOT, False), os.listdir(ROOT)), (None, []))
 
+    # Saved unticked means not read, whether or not the files will go: a
+    # virus scanner holding one open is not a reason to read them.
     community.stage(ROOT, {"enumain.dic": b"a\tb\r\n"}, FIRST)
-    community.requestRemoval(ROOT)
-    community.cancelRemoval(ROOT)
-    check("and one asked to go and then asked back stays",
+    community.prepare(ROOT)
+    kept = community._remove
+
+    def held(path):
+        if path.endswith("current"):
+            raise PermissionError("held open by a virus scanner")
+        return kept(path)
+
+    community._remove = held
+    try:
+        got = community.prepare(ROOT, False)
+    finally:
+        community._remove = kept
+    check("saved unticked, a set that will not go is still not read", got, None)
+    check("and the log says why",
+          any("take the community dictionaries away" in e
+              for e in sequence.LOGGED["error"]), True)
+    check("and a start that is saved ticked reads it again",
           community.prepare(ROOT), CURRENT)
 
     # The swap is two renames. If the second fails the first is undone, so
@@ -506,7 +536,8 @@ def unticked_checks():
           files(CURRENT), ["enumain.dic", "source.ini"])
     check("and the reader is told when it goes",
           len(heard("stop using")), 1)
-    check("which it does", community.Updater(ROOT).prepare(), None)
+    check("which it does, at the start whose saved setting is unticked",
+          community.Updater(ROOT).prepare(False), None)
 
     github = fresh()
     u = community.Updater(ROOT)
@@ -530,12 +561,11 @@ def unticked_checks():
         u.want(False, byReader=True)
     finally:
         community.discard = real
-    check("a download waiting that cannot be thrown away does not stop the"
-          " set in use being asked to go",
-          os.path.exists(os.path.join(ROOT, "remove")), True)
-    check("and the reader is still told", len(heard("stop using")), 1)
-    check("and at the next start neither is used",
-          community.Updater(ROOT).prepare(), None)
+    check("a download waiting that cannot be thrown away is said in the log",
+          any("throw away" in e for e in sequence.LOGGED["error"]), True)
+    check("and the reader is still told the set goes", len(heard("stop using")), 1)
+    check("and at the next start, saved unticked, neither is used",
+          community.Updater(ROOT).prepare(False), None)
 
     fresh()
     u = community.Updater(ROOT)

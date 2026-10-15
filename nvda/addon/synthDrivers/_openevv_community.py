@@ -13,7 +13,8 @@
 # A download is checked and written beside the set in use, and prepare() puts
 # it in its place as the driver starts, before any dictionary has been read.
 # Ticking the box fetches now and is heard from the next start; unticking takes
-# the set away at the next start, for the same reason.
+# the set away at the next start, for the same reason. What decides, at each
+# start, is the setting NVDA hands back, and nothing else.
 #
 # A set is replaced whole and never merged into, so a word the community takes
 # out is gone, and nothing of the reader's own is ever in these files. Their own
@@ -65,7 +66,6 @@ CURRENT = "current"
 PENDING = "pending"
 PARTIAL = "pending.partial"
 OLD = "current.old"
-REMOVE = "remove"
 SOURCE = "source.ini"
 STATE = "state.ini"
 
@@ -163,8 +163,10 @@ def _checkFile(name, data):
 		raise ValueError("%s starts with a byte order mark" % name)
 	if b"\0" in data:
 		raise ValueError("%s has a nul in it" % name)
-	for number, line in enumerate(data.split(b"\n"), 1):
-		line = line.rstrip(b"\r")
+	# A line at a time, so a file of millions of short lines is never a
+	# list of millions of objects.
+	for number, line in enumerate(io.BytesIO(data), 1):
+		line = line.rstrip(b"\r\n")
 		if not line:
 			continue
 		word, tab, said = line.partition(b"\t")
@@ -226,26 +228,30 @@ def stage(root, files, revision):
 
 
 def prepare(root, wanted=True):
-	"""Put a finished download in its place, or take the set away if the
-	reader asked; then answer the folder to read, or None.
+	"""Put a finished download in its place, or take the set away; then
+	answer the folder to read, or None.
 
 	The driver calls this once NVDA has handed back the saved settings and
 	before it has read a dictionary, which is the one moment the set can
-	change without the engine having read it. wanted is the saved setting:
-	saved unticked, the set and anything waiting go now. Anything that goes
-	wrong leaves the set that was there.
+	change without the engine having read it. wanted is the saved setting.
+	Saved unticked, the set and anything waiting go now, and are not read
+	even if they will not go. Otherwise anything that goes wrong leaves the
+	set that was there.
 	"""
 	current = os.path.join(root, CURRENT)
 	pending = os.path.join(root, PENDING)
 	old = os.path.join(root, OLD)
 	with _FILES:
-		try:
-			if not wanted or os.path.lexists(os.path.join(root, REMOVE)):
+		if not wanted:
+			try:
 				if any(os.path.lexists(os.path.join(root, leaf)) for leaf in (CURRENT, PENDING)):
-					log.info("openevv: the community dictionaries are no longer used, as asked")
-				for leaf in (CURRENT, PENDING, PARTIAL, OLD, REMOVE):
+					log.info("openevv: the community dictionaries are no longer used")
+				for leaf in (CURRENT, PENDING, PARTIAL, OLD):
 					_remove(os.path.join(root, leaf))
-				return None
+			except Exception:  # noqa: BLE001
+				log.error("openevv: could not take the community dictionaries away", exc_info=True)
+			return None
+		try:
 			# A start that stopped between the swap's two renames left the
 			# set that was in use under the old name.
 			if not os.path.isdir(current) and os.path.isdir(old):
@@ -268,22 +274,6 @@ def prepare(root, wanted=True):
 		except Exception:  # noqa: BLE001
 			log.error("openevv: could not put the community dictionaries in place", exc_info=True)
 	return current if revisionOf(current) is not None else None
-
-
-def requestRemoval(root):
-	"""Ask the next start to take the set in use away."""
-	with _FILES:
-		os.makedirs(root, exist_ok=True)
-		with open(os.path.join(root, REMOVE), "w", encoding="utf-8") as f:
-			f.write("taken away at the next start\n")
-
-
-def cancelRemoval(root):
-	with _FILES:
-		try:
-			os.remove(os.path.join(root, REMOVE))
-		except FileNotFoundError:
-			pass
 
 
 def discard(root):
@@ -490,9 +480,12 @@ class Updater:
 
 	def want(self, enable, byReader):
 		"""What the setting says now. byReader is whether the reader changed it,
-		as opposed to NVDA handing back what was saved."""
-		current = os.path.join(self.root, CURRENT)
-		going = False
+		as opposed to NVDA handing back what was saved.
+
+		Unticked, the set in use stays until the next start, which takes it
+		away because the setting it is handed says to; a download waiting
+		goes now, since the engine never read it.
+		"""
 		with self._lock:
 			if self._stopped:
 				return
@@ -500,29 +493,16 @@ class Updater:
 			if not enable:
 				# Under the lock a download stages under, so one finishing now
 				# is either thrown away here or sees it is no longer wanted.
-				# The set in use is asked to go first, and whatever happens to
-				# the download waiting does not stop that.
-				if self.inUse or os.path.isdir(current):
-					try:
-						requestRemoval(self.root)
-						going = True
-					except OSError:
-						log.error("openevv: could not ask for the community dictionaries"
-						          " to be taken away", exc_info=True)
 				try:
 					discard(self.root)
 				except OSError:
 					log.error("openevv: could not throw away a community dictionary download",
 					          exc_info=True)
-				if byReader and going:
+				if byReader and self.inUse:
 					# Translators: Said when the reader stops using the community
 					# dictionaries, which takes effect when NVDA next starts.
 					_announce(_("NVDA will stop using the community dictionaries the next time it starts."))
 				return
-		try:
-			cancelRemoval(self.root)
-		except OSError:
-			log.error("openevv: could not keep the community dictionaries", exc_info=True)
 		self._check(force=byReader, tell=byReader)
 
 	def stop(self):
