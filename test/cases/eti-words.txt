@@ -196,6 +196,8 @@
 0x10000	-1	northbrook
 0x10000	-1	pompey
 0x10000	-1	prima
+0x10000	-1	quality
+0x10000	-1	qualities
 0x10000	-1	quindlen
 0x10000	-1	recognizable
 0x10000	-1	sakhalin
