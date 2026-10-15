@@ -264,6 +264,16 @@ def validation_checks():
     finally:
         community.MAX_FILE = limit
 
+    limits = community.MAX_FILE, community.MAX_TOTAL
+    try:
+        community.MAX_FILE = 64
+        community.MAX_TOTAL = 100
+        refused("files under the limit one at a time but over it together are"
+                " refused", archive(files={"ENUmain.dic": b"a\tb\r\n" * 11,
+                                           "ENURoot.dic": b"a\tb\r\n" * 11}))
+    finally:
+        community.MAX_FILE, community.MAX_TOTAL = limits
+
     blank = community.validate(archive(files=dict(GOOD, **{
         "ENUmain.dic": b"omg\toe em jee\r\n\r\ntabindex\tTab Index",
     })))
@@ -506,6 +516,28 @@ def unticked_checks():
           (SAID, github.asked), ([], []))
 
     fresh()
+    community.stage(ROOT, {"enumain.dic": b"a\tb\r\n"}, FIRST)
+    u = community.Updater(ROOT)
+    u.prepare()
+    community.stage(ROOT, {"enumain.dic": b"c\td\r\n"}, SECOND)
+    real = community.discard
+
+    def held(root):
+        raise PermissionError("held open by a virus scanner")
+
+    community.discard = held
+    try:
+        u.want(False, byReader=True)
+    finally:
+        community.discard = real
+    check("a download waiting that cannot be thrown away does not stop the"
+          " set in use being asked to go",
+          os.path.exists(os.path.join(ROOT, "remove")), True)
+    check("and the reader is still told", len(heard("stop using")), 1)
+    check("and at the next start neither is used",
+          community.Updater(ROOT).prepare(), None)
+
+    fresh()
     u = community.Updater(ROOT)
     check("nothing in use at the start", u.prepare(), None)
     community.stage(ROOT, {"enumain.dic": b"a\tb\r\n"}, FIRST)
@@ -679,6 +711,19 @@ def restart_checks():
         real._askRestart()
         check("and yes with another message box still open does not restart,"
               " as NVDA will not", done, [])
+
+        class ReadOnly(dict):
+            def save(self):
+                raise PermissionError("the configuration is read-only")
+
+        modal[0] = False
+        sys.modules["config"].conf = ReadOnly(sys.modules["config"].conf)
+        real._announce = SAID.append
+        del SAID[:]
+        real._askRestart()
+        check("yes when the configuration cannot be saved does not restart",
+              done, [])
+        check("and says why", len(heard("could not be saved")), 1)
     finally:
         for name in ("wx", "core", "gui"):
             sys.modules.pop(name, None)
@@ -688,6 +733,8 @@ def restart_checks():
 
 
 def driver_checks():
+    """The driver as NVDA runs it: made, then handed its saved settings, and
+    only then reading dictionaries."""
     github = fresh()
     d = driver()
     check("the setting is offered",
@@ -695,8 +742,6 @@ def driver_checks():
     check("with nothing downloaded the engine reads what it always did",
           folders(d), [(PERSONAL, OWN)])
 
-    SAVED["communityDictionaries"] = False
-    d.initSettings()
     d.communityDictionaries = True
     check("ticked, it downloads", community.revisionOf(PENDING), FIRST)
     check("and the reader is told it is downloaded", len(heard(DOWNLOADED)), 1)
@@ -709,12 +754,11 @@ def driver_checks():
     d.terminate()
 
     SAVED["communityDictionaries"] = True
+    del SAID[:]
     d = driver()
     check("at the next start the community's set is read first, under"
           " everything of the reader's own",
           folders(d), [(CURRENT, PERSONAL, OWN)])
-    del SAID[:]
-    d.initSettings()
     check("NVDA restoring the setting at the start says nothing", SAID, [])
 
     d.dictionarySet = "none"
@@ -733,10 +777,39 @@ def driver_checks():
     check("from the disk as well", os.path.isdir(CURRENT), False)
     d.terminate()
 
+    # Read as each saved setting came back, the dictionaries were read, freed
+    # and read again, and freeing the community's root file is the slow part.
+    fresh()
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    SAVED.update(communityDictionaries=True, personalDictionary=False,
+                 dictionarySet="none")
+    d = driver()
+    check("saved settings that change the folders read the dictionaries once,"
+          " from the folders they ask for", folders(d), [(CURRENT, OWN)])
+    d.terminate()
+
+    fresh()
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    community.prepare(ROOT)
+    community.stage(ROOT, {"enuroot.dic": b"c\td\r\n"}, SECOND)
+    SAVED["communityDictionaries"] = False
+    d = driver()
+    check("saved unticked, a set on disk is never handed to the engine",
+          folders(d), [(PERSONAL, OWN)])
+    check("and it and the download waiting are gone at once",
+          (os.path.isdir(CURRENT), os.path.isdir(PENDING)), (False, False))
+    d.terminate()
+
+    fresh()
+    community.stage(ROOT, {"enuroot.dic": b"a\tb\r\n"}, FIRST)
+    d = driver()
+    check("with no setting saved at all, as on NVDA's first load, a set left"
+          " on disk is not used", folders(d), [(PERSONAL, OWN)])
+    d.terminate()
+
     fresh()
     OPEN[0] = True
     d = driver()
-    d.initSettings()
     d.communityDictionaries = True
     d.terminate()
     OPEN[0] = False

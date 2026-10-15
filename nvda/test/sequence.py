@@ -146,6 +146,9 @@ class _SynthDriver:
     def VolumeSetting(cls, minStep=1):
         return _Setting("volume")
 
+    def initSettings(self):
+        """Where NVDA hands back the saved settings; none are saved here."""
+
     # These two are NVDA's own arithmetic, copied so the numbers this test
     # sees are the numbers NVDA would produce.
     def _percentToParam(self, percent, min, max):
@@ -366,7 +369,11 @@ def driver():
     _openevv = engine_module
 
     engine_module.Engine = FakeEngine
-    return driver_module.SynthDriver()
+    # NVDA makes a driver and then hands it its saved settings, and the driver
+    # reads its dictionaries only once it has them.
+    d = driver_module.SynthDriver()
+    d.initSettings()
+    return d
 
 
 # ---- the checks ------------------------------------------------------------

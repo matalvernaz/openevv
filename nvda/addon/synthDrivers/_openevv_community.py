@@ -52,6 +52,9 @@ CHECK_EVERY = 24 * 60 * 60
 MAX_HEAD = 1024
 MAX_ARCHIVE = 32 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
+#: And all the files together, since an archive can unpack to far more than it
+#: is and every file is held while the rest are checked.
+MAX_TOTAL = 64 * 1024 * 1024
 
 #: How long one request may take, in seconds.
 TIMEOUT = 30
@@ -113,6 +116,7 @@ def validate(archive):
 	except zipfile.BadZipFile as e:
 		raise ValueError("not an archive: %s" % e)
 	found = {}
+	total = 0
 	with z:
 		# GitHub packs a repository as one folder named for it and the commit.
 		# An archive that is anything else is not one of GitHub's.
@@ -134,10 +138,17 @@ def validate(archive):
 				raise ValueError("%s is in the archive twice" % name)
 			if info.file_size > MAX_FILE:
 				raise ValueError("%s is %d bytes" % (parts[1], info.file_size))
+			if total + info.file_size > MAX_TOTAL:
+				raise ValueError("the dictionaries come to more than %d bytes" % MAX_TOTAL)
 			with z.open(info) as f:
 				data = f.read(MAX_FILE + 1)
 			if len(data) > MAX_FILE:
 				raise ValueError("%s is more than %d bytes" % (parts[1], MAX_FILE))
+			# Again for what was read, which a damaged archive can make more
+			# than it said.
+			total += len(data)
+			if total > MAX_TOTAL:
+				raise ValueError("the dictionaries come to more than %d bytes" % MAX_TOTAL)
 			_checkFile(parts[1], data)
 			found[name] = data
 	if not found:
@@ -214,23 +225,26 @@ def stage(root, files, revision):
 		os.replace(partial, pending)
 
 
-def prepare(root):
+def prepare(root, wanted=True):
 	"""Put a finished download in its place, or take the set away if the
 	reader asked; then answer the folder to read, or None.
 
-	The driver calls this as it starts and before it has read a dictionary,
-	which is the one moment the set can change without the engine having read
-	it. Anything that goes wrong leaves the set that was there.
+	The driver calls this once NVDA has handed back the saved settings and
+	before it has read a dictionary, which is the one moment the set can
+	change without the engine having read it. wanted is the saved setting:
+	saved unticked, the set and anything waiting go now. Anything that goes
+	wrong leaves the set that was there.
 	"""
 	current = os.path.join(root, CURRENT)
 	pending = os.path.join(root, PENDING)
 	old = os.path.join(root, OLD)
 	with _FILES:
 		try:
-			if os.path.lexists(os.path.join(root, REMOVE)):
+			if not wanted or os.path.lexists(os.path.join(root, REMOVE)):
+				if any(os.path.lexists(os.path.join(root, leaf)) for leaf in (CURRENT, PENDING)):
+					log.info("openevv: the community dictionaries are no longer used, as asked")
 				for leaf in (CURRENT, PENDING, PARTIAL, OLD, REMOVE):
 					_remove(os.path.join(root, leaf))
-				log.info("openevv: the community dictionaries are no longer used, as asked")
 				return None
 			# A start that stopped between the swap's two renames left the
 			# set that was in use under the old name.
@@ -433,7 +447,15 @@ def _askRestart():
 	try:
 		config.conf.save()
 	except Exception:  # noqa: BLE001
-		log.error("openevv: could not save the configuration before restarting", exc_info=True)
+		# Restarting now would come back with the box unticked, having said
+		# the configuration would be saved first. The download stays and is
+		# used at the next start whenever that is.
+		log.error("openevv: could not save the configuration, so NVDA was not restarted",
+		          exc_info=True)
+		# Translators: Said when NVDA was not restarted for the community
+		# dictionaries because its configuration could not be saved.
+		_announce(_("NVDA was not restarted, because its configuration could not be saved."))
+		return
 	core.restart()
 
 
@@ -461,8 +483,8 @@ class Updater:
 		#: ticks the box twice is asked once.
 		self._offering = False
 
-	def prepare(self):
-		folder = prepare(self.root)
+	def prepare(self, wanted=True):
+		folder = prepare(self.root, wanted)
 		self.inUse = folder is not None
 		return folder
 
@@ -478,13 +500,19 @@ class Updater:
 			if not enable:
 				# Under the lock a download stages under, so one finishing now
 				# is either thrown away here or sees it is no longer wanted.
-				try:
-					discard(self.root)
-					if self.inUse or os.path.isdir(current):
+				# The set in use is asked to go first, and whatever happens to
+				# the download waiting does not stop that.
+				if self.inUse or os.path.isdir(current):
+					try:
 						requestRemoval(self.root)
 						going = True
+					except OSError:
+						log.error("openevv: could not ask for the community dictionaries"
+						          " to be taken away", exc_info=True)
+				try:
+					discard(self.root)
 				except OSError:
-					log.error("openevv: could not stop using the community dictionaries",
+					log.error("openevv: could not throw away a community dictionary download",
 					          exc_info=True)
 				if byReader and going:
 					# Translators: Said when the reader stops using the community

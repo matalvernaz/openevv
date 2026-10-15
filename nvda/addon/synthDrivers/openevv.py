@@ -199,22 +199,30 @@ class SynthDriver(SynthDriver):
 		self._dictionarySet = dictionaries.NO_SET
 		self._personalDictionary = True
 		self._communityDictionaries = False
-		#: Whether NVDA has handed back the saved settings yet. A change after
-		#: that is the reader's, and is answered.
+		#: Whether NVDA has handed back the saved settings yet. Until it has,
+		#: no dictionary is read; a change after it is the reader's, and is
+		#: answered.
 		self._settled = False
-		# Before anything is read: the one moment a downloaded set can be put
-		# in place without changing a file the engine has read.
 		self._community = community.Updater()
-		self._communityFolder = self._community.prepare()
+		#: The community's set, once the saved settings say whether to read it.
+		self._communityFolder = None
 		self._engine = _openevv.Engine(self._onIndexReached)
 		self._engine.open()
 		self._voice = self._voiceId(self._engine.language, _openevv.VOICE_FIRST)
-		self._applyDictionaries()
 		log.debug("openevv: engine version %s" % self._engine.version)
 
 	def initSettings(self):
 		super().initSettings()
+		# Every saved setting is back and nothing has been read. This is the
+		# one moment the community's set can be put in place, or taken away,
+		# without changing a file the engine has read, and the moment to read
+		# the dictionaries once, from the folders the settings ask for. Read
+		# as each setting came back, they were read, freed and read again, and
+		# freeing a large one is slow enough to silence the reader
+		# (upstream #49).
+		self._communityFolder = self._community.prepare(self._communityDictionaries)
 		self._settled = True
+		self._applyDictionaries()
 
 	def terminate(self):
 		self._community.stop()
@@ -643,12 +651,16 @@ class SynthDriver(SynthDriver):
 		enable = bool(enable)
 		byReader = self._settled and enable != self._communityDictionaries
 		self._communityDictionaries = enable
-		# Never the folders the engine reads, which were settled as the driver
-		# started: changing them now is the reload that upstream #49 makes slow
-		# enough to silence the reader. What this changes is the next start.
+		# Never the folders the engine reads, which were settled when the
+		# saved settings came back: changing them now is the reload that
+		# upstream #49 makes slow enough to silence the reader. What this
+		# changes is the next start.
 		self._community.want(enable, byReader)
 
 	def _applyDictionaries(self):
+		if not self._settled:
+			# initSettings reads them once every saved setting is back.
+			return
 		# Worked out here, on NVDA's thread, because finding a managed set
 		# means asking NVDA for its add-ons; the engine is handed folders.
 		try:
