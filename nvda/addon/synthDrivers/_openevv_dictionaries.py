@@ -1,7 +1,10 @@
 # Where the openevv driver finds pronunciation dictionaries.
 #
-# Three places, read in this order for each language, and the later of two
+# Four places, read in this order for each language, and the later of two
 # saying the same word wins:
+#
+# The community's set as the driver downloaded it, when the reader has ticked
+# the box for it; _openevv_community says how it gets there.
 #
 # A managed set: the community dictionaries as another add-on carries them.
 # Eloquence Dictionary Manager is the one there is, and what it publishes is a
@@ -164,12 +167,15 @@ def managedSets():
 	return found
 
 
-def folders(chosen, personal):
+def folders(chosen, personal, community=None):
 	"""The folders a language's dictionary is made from, in the order they
 	are read. A chosen set that is not installed is said once in the log and
 	otherwise skipped: the choice is kept, and comes back into force if the
-	set does."""
+	set does. The downloaded community set, where there is one, is read first,
+	so everything else the reader has chosen is laid over it."""
 	out = []
+	if community:
+		out.append(community)
 	if chosen and chosen != NO_SET:
 		one = managedSets().get(chosen)
 		if one is None:

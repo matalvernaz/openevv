@@ -40,6 +40,7 @@ from synthDriverHandler import (
 )
 
 from . import _openevv
+from . import _openevv_community as community
 from . import _openevv_dictionaries as dictionaries
 
 #: What the engine's speed setting is worth at either end of the reader's
@@ -167,6 +168,12 @@ class SynthDriver(SynthDriver):
 			False,
 			defaultVal=True,
 		),
+		BooleanDriverSetting(
+			"communityDictionaries",
+			# Translators: Label for a setting in voice settings dialog.
+			_("Use the latest communit&y dictionaries"),
+			False,
+		),
 	)
 
 	supportedCommands = {
@@ -191,13 +198,26 @@ class SynthDriver(SynthDriver):
 		self._voiceTags = False
 		self._dictionarySet = dictionaries.NO_SET
 		self._personalDictionary = True
+		self._communityDictionaries = False
+		#: Whether NVDA has handed back the saved settings yet. A change after
+		#: that is the reader's, and is answered.
+		self._settled = False
+		# Before anything is read: the one moment a downloaded set can be put
+		# in place without changing a file the engine has read.
+		self._community = community.Updater()
+		self._communityFolder = self._community.prepare()
 		self._engine = _openevv.Engine(self._onIndexReached)
 		self._engine.open()
 		self._voice = self._voiceId(self._engine.language, _openevv.VOICE_FIRST)
 		self._applyDictionaries()
 		log.debug("openevv: engine version %s" % self._engine.version)
 
+	def initSettings(self):
+		super().initSettings()
+		self._settled = True
+
 	def terminate(self):
+		self._community.stop()
 		self._engine.close()
 
 	# ---- speaking ----------------------------------------------------
@@ -616,11 +636,25 @@ class SynthDriver(SynthDriver):
 		self._personalDictionary = bool(enable)
 		self._applyDictionaries()
 
+	def _get_communityDictionaries(self):
+		return self._communityDictionaries
+
+	def _set_communityDictionaries(self, enable):
+		enable = bool(enable)
+		byReader = self._settled and enable != self._communityDictionaries
+		self._communityDictionaries = enable
+		# Never the folders the engine reads, which were settled as the driver
+		# started: changing them now is the reload that upstream #49 makes slow
+		# enough to silence the reader. What this changes is the next start.
+		self._community.want(enable, byReader)
+
 	def _applyDictionaries(self):
 		# Worked out here, on NVDA's thread, because finding a managed set
 		# means asking NVDA for its add-ons; the engine is handed folders.
 		try:
-			folders = dictionaries.folders(self._dictionarySet, self._personalDictionary)
+			folders = dictionaries.folders(
+				self._dictionarySet, self._personalDictionary, self._communityFolder
+			)
 		except Exception:  # noqa: BLE001
 			log.error("openevv: could not work out where dictionaries are", exc_info=True)
 			return

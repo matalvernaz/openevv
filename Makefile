@@ -1385,12 +1385,14 @@ $(BUILD)/libevv-win32$(SUF).a: $(OBJECTSWIN32) $(RULESTAMP)
 nvda: win win32
 	@python3 nvda/build.py
 
-# The two checks that want neither Windows, nor the libraries, nor sound.
+# The checks that want neither Windows, nor the libraries, nor sound.
 # sequence.py is a speech sequence in and the calls it becomes out, with NVDA
 # stood in for. engine.py goes further down: it runs the engine layer itself
 # against a library and a player that are stood in for, which is what catches a
 # fault in code the first check never enters -- the add-on shipped once with a
-# name error in exactly that gap.
+# name error in exactly that gap. community.py is the community dictionaries'
+# download, with GitHub and the download's thread stood in for.
 nvda-test:
 	@python3 nvda/test/sequence.py
 	@python3 nvda/test/engine.py
+	@python3 nvda/test/community.py
