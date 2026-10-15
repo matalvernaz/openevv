@@ -574,7 +574,8 @@ def unticked_checks():
     u.want(False, byReader=True)
     check("unticked, what is waiting goes at once, since the engine never"
           " read it", (files(PENDING), os.listdir(ROOT)), (None, []))
-    check("with nothing to tell the reader", SAID, [])
+    check("and the reader, who heard it was downloaded, hears it went",
+          len(heard("discarded")), 1)
 
     github = fresh()
     u = community.Updater(ROOT)
@@ -620,6 +621,8 @@ def offer_checks():
     tick()
     check("cancelled before the settings closed, it never asks", ASKED, [])
     check("and what was downloaded is gone", files(PENDING), None)
+    check("and the reader is told, since Escape is Cancel and an easy key to"
+          " press", len(heard("discarded")), 1)
 
     fresh()
     OPEN[0] = True

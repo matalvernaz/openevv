@@ -493,6 +493,7 @@ class Updater:
 			if not enable:
 				# Under the lock a download stages under, so one finishing now
 				# is either thrown away here or sees it is no longer wanted.
+				waiting = revisionOf(os.path.join(self.root, PENDING)) is not None
 				try:
 					discard(self.root)
 				except OSError:
@@ -502,6 +503,14 @@ class Updater:
 					# Translators: Said when the reader stops using the community
 					# dictionaries, which takes effect when NVDA next starts.
 					_announce(_("NVDA will stop using the community dictionaries the next time it starts."))
+				elif byReader and waiting:
+					# Said because Cancel in NVDA's settings, and so Escape, unticks
+					# the box too: the reader heard it was downloaded and is owed
+					# hearing that it went.
+					# Translators: Said when a download of the community
+					# dictionaries is thrown away because the box was unticked, or
+					# the settings dialog was cancelled.
+					_announce(_("The downloaded community dictionaries were discarded."))
 				return
 		self._check(force=byReader, tell=byReader)
 
