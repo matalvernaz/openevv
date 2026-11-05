@@ -296,7 +296,8 @@ def dictionaryFiles(folders, language):
 
 	Matched without regard to case. The community's files are called
 	ENURoot.dic and IBM's drivers ask for enuroot.dic, which is one file on
-	Windows and two names that miss each other anywhere else.
+	Windows and two names that miss each other anywhere else. A folder may
+	come paired with the languages it is not read for.
 	"""
 	code = DICTIONARY_CODES.get(language)
 	found = []
@@ -304,6 +305,10 @@ def dictionaryFiles(folders, language):
 		return found
 	listed = []
 	for folder in folders:
+		if not isinstance(folder, str):
+			folder, passed = folder
+			if language in passed:
+				continue
 		try:
 			listed.append((folder, sorted(os.listdir(folder))))
 		except OSError:

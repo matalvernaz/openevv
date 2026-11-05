@@ -70,6 +70,8 @@
 
 /* How many volumes the holder makes. */
 #define UD_VOLUMES 3
+#define UD_MAIN    0
+#define UD_ROOT    1
 
 typedef struct UserDict {
     char     path[0x108];   /* +0x000, what it was told to load */
@@ -710,32 +712,379 @@ int32_t setCurrentUserDict(delta_state *d, DictionarySet *s)
 }
 
 
-/* ---- what the rules call --------------------------------------------- */
+/* ---- the dictionary a language carries -------------------------------- */
 
-/* Both of these answer one when they did nothing, which is what the rules
-   read as "carry on as you were". */
-int32_t callUserDictLookup(delta_state *d, const void *volume,
-                           const delta_token *l, const delta_token *r)
+/* Ours. A language may carry a dictionary of its own in the image, written
+   by tools/module/builtindict.py out of lang/<tag>/dictionary: the same three
+   volumes as a caller's, each entry a line of the kind a caller's file has,
+   sorted so that a lookup is a search by halves and nothing is built when an
+   instance starts. It is consulted only where the caller's dictionary did
+   not answer, so a word the caller has put in its own is said the caller's
+   way, and eciBuiltInDict turns it off. */
+
+static const delta_dict_entry *builtin_find(const delta_builtin_dict *b,
+                                            int32_t vol, const char *word)
+{
+    int32_t lo = 0, hi;
+
+    if (b == 0 || vol < 0 || vol >= UD_VOLUMES)
+        return 0;
+    hi = b->count[vol] - 1;
+    while (lo <= hi) {
+        int32_t mid = lo + (hi - lo) / 2;
+        int     c   = strcmp(b->volume[vol][mid].word, word);
+
+        if (c == 0)
+            return &b->volume[vol][mid];
+        if (c < 0)
+            lo = mid + 1;
+        else
+            hi = mid - 1;
+    }
+    return 0;
+}
+
+/* Whether every character is one the stream's first field can name, which
+   is what a line of a caller's file has to pass to be kept at all. Asked of
+   an entry when it is found rather than when the image was built, since the
+   names belong to the running machine. */
+static int builtin_sayable(delta_state *d, int8_t stream, const char *s)
+{
+    for (; *s; s++) {
+        char        one[2];
+        const char *name;
+        void       *value;
+
+        if (*s == ' ')
+            continue;
+        one[0] = *s;
+        one[1] = 0;
+        if (!non_unique_value(d, stream, 0, one, &name, &value))
+            return 0;
+    }
+    return 1;
+}
+
+static int32_t builtin_lookupAndTranslate(delta_state *d, int32_t vol,
+                                          int32_t l, int32_t r)
+{
+    DeltaLang                *lang = DT_LANG(d);
+    const delta_language     *of   = delta_lang_of(d);
+    int8_t                    stream = DL_STREAM(lang);
+    const delta_dict_entry   *e;
+
+    if (lang->builtin_off || of == 0 || of->builtin_dict == 0
+        || vol < 0 || vol >= UD_VOLUMES || of->builtin_dict->count[vol] == 0)
+        return UD_NOT_FOUND;
+
+    if (!sync_in_stm(d, stream, l) || !sync_in_stm(d, stream, r))
+        return UD_NO_SPINE;
+    if (!extract_string(d, stream, l, r, lang->builtin_last[vol],
+                        UD_LAST_ROOM))
+        return UD_NO_SPINE;
+
+    e = builtin_find(of->builtin_dict, vol, lang->builtin_last[vol]);
+    if (e == 0 || !builtin_sayable(d, stream, e->says))
+        return UD_NOT_FOUND;
+
+    del_two_point(d, stream, l, r);
+    OWNER_MOVED(d) = 1;
+    if (!insert_string(d, stream, r, e->says))
+        return UD_NO_SPINE;
+
+    lang->builtin_took[vol] = 1;
+    return UD_OK;
+}
+
+/* Ours as well, and for a caller's dictionary too. A main entry is a whole
+   token, and where the whole of a possessive is not held the rules ask for
+   it again without the 's. An entry in words then takes the ending back as
+   any word does, but one in phones is shut in its brackets, and the ending
+   was left standing on its own and spelled out: Frey's as fry ess. So where
+   a main volume holds the word without its ending and the entry ends in
+   phones, the possessive is read here as the entry with the ending's own
+   sound inside its last brackets -- z, s after a voiceless sound, and a
+   syllable of its own after a hissing one, the way the rules write boss's.
+   The caller's entry for the word is the one asked first, as it would be in
+   the lookup the rules make next, and one ending in words is left to
+   them. */
+
+#define UD_SAYS_ROOM 0x220
+
+static const char *main_says(delta_state *d, const char *word)
+{
+    DeltaLang            *lang = DT_LANG(d);
+    const delta_language *of   = delta_lang_of(d);
+    DictionarySet        *s    = DL_CURRENT(lang);
+    const char           *says;
+
+    if (s != 0 && s->status == 0 && s->vol[UD_MAIN] != 0
+        && (says = ud_lookup(s->vol[UD_MAIN], word)) != 0)
+        return says;
+    if (!lang->builtin_off && of != 0 && of->builtin_dict != 0) {
+        const delta_dict_entry *e = builtin_find(of->builtin_dict, UD_MAIN,
+                                                 word);
+
+        if (e != 0)
+            return e->says;
+    }
+    return 0;
+}
+
+static int32_t main_possessive(delta_state *d, int32_t l, int32_t r)
+{
+    DeltaLang            *lang   = DT_LANG(d);
+    const delta_language *of     = delta_lang_of(d);
+    int8_t                stream = DL_STREAM(lang);
+    char                 *w      = lang->builtin_last[UD_MAIN];
+    char                  stem[UD_LAST_ROOM];
+    char                  out[UD_SAYS_ROOM];
+    const char           *says, *p, *q;
+    size_t                n, k;
+    char                  last;
+
+    /* The ending's phones are English's; the same letters are other sounds
+       in another language's alphabet. */
+    if (of == 0 || of->tag == 0 || strncmp(of->tag, "en", 2) != 0)
+        return UD_NOT_FOUND;
+    if (!sync_in_stm(d, stream, l) || !sync_in_stm(d, stream, r))
+        return UD_NO_SPINE;
+    if (!extract_string(d, stream, l, r, w, UD_LAST_ROOM))
+        return UD_NO_SPINE;
+
+    n = strlen(w);
+    if (n < 3 || w[n - 2] != '\'' || w[n - 1] != 's')
+        return UD_NOT_FOUND;
+    memcpy(stem, w, n - 2);
+    stem[n - 2] = 0;
+
+    says = main_says(d, stem);
+    if (says == 0)
+        return UD_NOT_FOUND;
+    k = strlen(says);
+    for (p = 0, q = says; (q = strstr(q, "`[")) != 0; q++)
+        p = q;
+    if (p == 0 || k + 8 > sizeof out || says[k - 1] != ']'
+        || says + k - 1 - (p + 2) < 1
+        || strpbrk(p + 2, "`[") != 0 || strchr(p, ']') != says + k - 1)
+        return UD_NOT_FOUND;
+
+    k--;
+    last = says[k - 1];
+    memcpy(out, says, k);
+    if (strchr("szSZCJ", last) != 0) {
+        k--;
+        memcpy(out + k, ".0", 2);
+        out[k + 2] = last;
+        memcpy(out + k + 3, "Xz", 2);
+        k += 5;
+    } else
+        out[k++] = strchr("ptkfT", last) != 0 ? 's' : 'z';
+    out[k++] = ']';
+    out[k] = 0;
+    if (!builtin_sayable(d, stream, out))
+        return UD_NOT_FOUND;
+
+    del_two_point(d, stream, l, r);
+    OWNER_MOVED(d) = 1;
+    if (!insert_string(d, stream, r, out))
+        return UD_NO_SPINE;
+
+    lang->builtin_took[UD_MAIN] = 1;
+    return UD_OK;
+}
+
+/* Ours as well. Where the language asks for it, a word in the main volume's
+   place that neither dictionary holds and that has a capital inside it is
+   read as the words it is made of -- iPhone as i Phone, NixOS as Nix OS,
+   HTMLElement as HTML Element -- by putting a space before each capital that
+   starts one, the same way an entry saying so would. A capital starts a word
+   after a small letter, and the last of a run of capitals does when small
+   letters follow it, unless all that follows is a plural s, so that APIs and
+   IDs are left as they are. Three kinds of word are left whole: one
+   beginning with a beginning the language lists and a capital, which is a
+   name -- McDonald, LeBron, DiCaprio -- one a root volume holds in small
+   letters, as it is or without a plural or possessive ending, which the
+   root lookup will find later and say as the entry says, and a possessive
+   whose word a main volume holds. */
+
+/* Only the letters of ASCII count. Text in UTF-8 handed over as the Western
+   set arrives with each accented letter as a capital A with a mark and a sign
+   after it, so counting the Western set's capitals cut cafe with its accent
+   in two. */
+static int split_upper(unsigned char c)
+{
+    return c >= 'A' && c <= 'Z';
+}
+
+static int split_lower(unsigned char c)
+{
+    return c >= 'a' && c <= 'z';
+}
+
+static int split_starts(const char *w, size_t i)
+{
+    size_t m;
+
+    if (!split_upper((unsigned char)w[i]))
+        return 0;
+    if (split_lower((unsigned char)w[i - 1]))
+        return 1;
+    if (!split_upper((unsigned char)w[i - 1])
+        || !split_lower((unsigned char)w[i + 1]))
+        return 0;
+    for (m = 0; split_lower((unsigned char)w[i + 1 + m]); m++)
+        ;
+    return !(m == 1 && w[i + 1] == 's'
+             && (w[i + 2] == 0 || w[i + 2] == '\''));
+}
+
+static int split_rooted(delta_state *d, const delta_builtin_dict *b,
+                        const char *low)
 {
     DictionarySet *s = DL_CURRENT(DT_LANG(d));
 
-    if (s == 0)
+    if (s != 0 && s->status == 0 && s->vol[UD_ROOT] != 0
+        && ud_lookup(s->vol[UD_ROOT], low) != 0)
         return 1;
+    return builtin_find(b, UD_ROOT, low) != 0;
+}
 
-    return ds_lookupAndTranslate(s, *(const int16_t *)((const char *)volume + 2),
-                                 l->value, r->value) != 0;
+static int split_held(delta_state *d, const delta_builtin_dict *b,
+                      const char *w)
+{
+    char   low[UD_LAST_ROOM];
+    size_t n;
+
+    /* The rules ask the main volume for a possessive's word next, so TeX's
+       is TeX's entry and PostgreSQL's PostgreSQL's. */
+    n = strlen(w);
+    if (n > 2 && n < sizeof low && w[n - 2] == '\'' && w[n - 1] == 's') {
+        memcpy(low, w, n - 2);
+        low[n - 2] = 0;
+        if (main_says(d, low) != 0)
+            return 1;
+    }
+
+    for (n = 0; w[n] && n + 1 < sizeof low; n++)
+        low[n] = (char)(split_upper((unsigned char)w[n]) ? w[n] + 0x20 : w[n]);
+    low[n] = 0;
+    if (split_rooted(d, b, low))
+        return 1;
+    if (n > 2 && low[n - 2] == '\'' && low[n - 1] == 's') {
+        low[n - 2] = 0;
+        return split_rooted(d, b, low);
+    }
+    if (n > 1 && low[n - 1] == 's') {
+        low[n - 1] = 0;
+        return split_rooted(d, b, low);
+    }
+    return 0;
+}
+
+static int32_t builtin_split(delta_state *d, int32_t l, int32_t r)
+{
+    DeltaLang                *lang = DT_LANG(d);
+    const delta_language     *of   = delta_lang_of(d);
+    const delta_builtin_dict *b    = of ? of->builtin_dict : 0;
+    int8_t                    stream = DL_STREAM(lang);
+    char                     *w = lang->builtin_last[UD_MAIN];
+    char                      out[UD_LAST_ROOM * 2];
+    const char *const        *p;
+    size_t                    i, k, n;
+    int                       cuts = 0;
+
+    if (lang->builtin_off || b == 0 || !b->split)
+        return UD_NOT_FOUND;
+    if (!sync_in_stm(d, stream, l) || !sync_in_stm(d, stream, r))
+        return UD_NO_SPINE;
+    if (!extract_string(d, stream, l, r, w, UD_LAST_ROOM))
+        return UD_NO_SPINE;
+
+    for (p = b->whole; p != 0 && *p != 0; p++) {
+        n = strlen(*p);
+        if (strncmp(w, *p, n) == 0 && split_upper((unsigned char)w[n]))
+            return UD_NOT_FOUND;
+    }
+
+    n = strlen(w);
+    for (i = k = 0; i < n && k + 2 < sizeof out; i++) {
+        if (i > 0 && split_starts(w, i)) {
+            out[k++] = ' ';
+            cuts++;
+        }
+        out[k++] = w[i];
+    }
+    out[k] = 0;
+    if (cuts == 0 || i < n || split_held(d, b, w))
+        return UD_NOT_FOUND;
+
+    del_two_point(d, stream, l, r);
+    OWNER_MOVED(d) = 1;
+    if (!insert_string(d, stream, r, out))
+        return UD_NO_SPINE;
+
+    lang->builtin_took[UD_MAIN] = 1;
+    return UD_OK;
+}
+
+void builtin_dict_enable(delta_state *d, int32_t on)
+{
+    if (d != 0 && d->dlang != 0)
+        DT_LANG(d)->builtin_off = !on;
+}
+
+
+/* ---- what the rules call --------------------------------------------- */
+
+/* Both of these answer one when they did nothing, which is what the rules
+   read as "carry on as you were". The caller's dictionary is asked first;
+   where it does not hold the word, has nothing in that volume -- which a
+   volume never loaded answers as no memory -- or is not there at all, the
+   language's own is asked. */
+int32_t callUserDictLookup(delta_state *d, const void *volume,
+                           const delta_token *l, const delta_token *r)
+{
+    DictionarySet *s   = DL_CURRENT(DT_LANG(d));
+    int32_t        vol = *(const int16_t *)((const char *)volume + 2);
+    int32_t        rc  = UD_NOT_FOUND;
+
+    if (vol >= 0 && vol < UD_VOLUMES)
+        DT_LANG(d)->builtin_took[vol] = 0;
+
+    if (s != 0) {
+        rc = ds_lookupAndTranslate(s, vol, l->value, r->value);
+        if (rc != UD_NOT_FOUND && rc != UD_NO_MEMORY)
+            return rc != 0;
+    }
+
+    rc = builtin_lookupAndTranslate(d, vol, l->value, r->value);
+    if (rc == UD_NOT_FOUND && vol == UD_MAIN)
+        rc = main_possessive(d, l->value, r->value);
+    if (rc == UD_NOT_FOUND && vol == UD_MAIN)
+        rc = builtin_split(d, l->value, r->value);
+    return rc != 0;
 }
 
 int32_t callInsertLastDictString(delta_state *d, const void *volume,
                                  const delta_token *l, const delta_token *r)
 {
-    DictionarySet *s = DL_CURRENT(DT_LANG(d));
+    DictionarySet *s   = DL_CURRENT(DT_LANG(d));
+    int32_t        vol = *(const int16_t *)((const char *)volume + 2);
+
+    if (vol >= 0 && vol < UD_VOLUMES && DT_LANG(d)->builtin_took[vol]) {
+        DeltaLang *lang = DT_LANG(d);
+        int8_t     stream = DL_STREAM(lang);
+
+        del_two_point(d, stream, l->value, r->value);
+        OWNER_MOVED(d) = 1;
+        return !insert_string(d, stream, r->value, lang->builtin_last[vol]);
+    }
 
     if (s == 0)
         return 1;
 
-    return ds_lookupUndo(s, *(const int16_t *)((const char *)volume + 2),
-                         l->value, r->value) != 0;
+    return ds_lookupUndo(s, vol, l->value, r->value) != 0;
 }
 
 ALIAS("??0UserDict@@QAE@XZ", "ud_ctor");

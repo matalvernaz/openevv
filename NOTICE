@@ -47,12 +47,14 @@ Felix Steindorff's, from openevv-nvda.
 IBM's
 -----
 
-Everything under `lang` but `lang/fifi` and `lang/ptbr` is transcribed out of
-IBM's Embedded ViaVoice objects: `lang/enus` is US English, `lang/dede` is
-German, `lang/engb` is British English, `lang/eses` and `lang/esus` are the two
-Spanishes, `lang/frfr` and `lang/frca` the two Frenches and `lang/itit` is
-Italian. `lang/fifi` and `lang/ptbr` are ETI's, and the section after this one
-says so.
+Everything under `lang` but `lang/fifi`, `lang/ptbr`, `lang/enus/dictionary`
+and `lang/engb/dictionary` is transcribed out of IBM's Embedded ViaVoice objects:
+`lang/enus` is US English, `lang/dede` is German, `lang/engb` is British
+English, `lang/eses` and `lang/esus` are the two Spanishes, `lang/frfr` and
+`lang/frca` the two Frenches and `lang/itit` is Italian. `lang/fifi` and
+`lang/ptbr` are ETI's and `lang/enus/dictionary` is ours, begun from the
+community's, and the two sections after this one say so, as they do of
+`lang/engb/dictionary`, which is ours.
 
 `lang/jajp` is Japanese and is not in the tree, because a language module that
 cannot yet make an instance would break any build that named it. What that
@@ -157,10 +159,21 @@ than anything with a claim of its own: the call `normalize_text` makes to IBM's
 `backquote`, and the annotations three of the `eti_` strings write with IBM's
 mark rather than 6.1's.
 
+In `lang/dede`, `lang/eses`, `lang/esus`, `lang/frfr`, `lang/frca`,
+`lang/itit` and `lang/plpl` alike: the rules at the end of `rules/ut_norm.up`
+that say they were lifted by `tools/rules/lift64.py`, the bytes named `eti_`
+in `rules/constants`, and the sixth character type and the records that use
+it in the statements are ETI Eloquence 6.1's, read out of the German, the two
+Spanish, the two French and the Italian modules Apple ships, Polish's being
+Italian's. They are on the same footing. The `convert_phone_number` at the
+end of both Frenches' `ut_norm.up` is ours.
+
 In `lang/enus` alone, the words `lang/enus/merge` says were added, set or read
 as 6.1 reads them say what 6.1 says, taken from what it speaks rather than
 from its tables, and are on the same footing. The ledger itself, the letter
-arms it names and the tools that measured it are ours.
+arms it names and the tools that measured it are ours, and so is
+`smiley_stands_alone` in `rules/ea_text.up`, written to ask where a smiley
+stands as 6.1's own arms for the smileys ask it.
 
 `lang/fifi`, Finnish, is ETI Eloquence 6.1's from end to end: the rules in its
 `rules/f61_*.up`, the strings in `rules/constants`, the variables, the
@@ -175,6 +188,37 @@ transcription and on the same footing. None of it is ours to license.
 `lang/ptbr`, Brazilian Portuguese, is ETI Eloquence 6.1's on exactly the same
 terms, read out of the Portuguese module Apple ships, and the one rule in its
 `rules/written.up` is the same transcription as Finnish's.
+
+The dictionary US English carries
+---------------------------------
+
+`lang/enus/dictionary` began on 14 October 2026 as a snapshot of
+IBMTTSDictionaries,
+
+    https://github.com/eigencrow/IBMTTSDictionaries
+
+pronunciations written for this engine by the people who listen to it,
+maintained by amirsol81, x0 and thunderdrop with contributions from many.
+Its authors dedicated it to the public domain under CC0 1.0,
+
+    https://creativecommons.org/publicdomain/zero/1.0/
+
+and on 30 October 2026 it became ours: one set of files, with the entries
+we took out of it named in `removed` and the commit of theirs whose changes
+it has taken named in `upstream`. The MIT licence covers what we wrote and
+the whole as it is put together, and so `split`, `removed`, `upstream` and
+`lang/engb/dictionary` as well. The community's entries in it were given to
+the public domain by their authors and stay free to anyone, whatever this
+file says.
+
+Some of its entries were written by tools/measure/published.py out of two
+dictionaries that ask nothing of whoever copies them. The Moby
+Pronunciator II is Grady Ward's, placed in the public domain by grant of its
+author in January 2001. The Carnegie Mellon Pronouncing Dictionary of 1993
+is Copyright 1993 by Carnegie Mellon University, which made its use for any
+research or commercial purpose completely unrestricted and asked only to be
+acknowledged, which this is. Wiktionary decides which of their readings is
+the published one and nothing of Wiktionary is copied.
 
 Where it came from
 ------------------
