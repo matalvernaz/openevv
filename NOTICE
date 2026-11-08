@@ -117,7 +117,13 @@ which read a long number's groups of noughts the way the same number without
 commas is read, where IBM's rules read the comma after such a group as a
 digit. They are written here and stand on IBM's rules rather than replacing
 them: the two calls in each `ut_numbr.dr` that were pointed at them are an
-edit to IBM's text, and the rest of that text is IBM's as it was.
+edit to IBM's text, and the rest of that text is IBM's as it was. So is
+`lang/enus/rules/ea_homog.up`, which settles two kinds of context IBM's
+homograph rule had no test for when it decides how read is said, on the same
+terms: the call to it in `ea_homog.dr` is the edit, and the rest is IBM's. The
+words added to both Englishes' set of file endings said as words,
+`three_letter_extensions` in each `.sets`, were chosen here; the set and the
+words IBM put in it are IBM's.
 
 That data is IBM's work, not ours. The MIT licence does not cover it and we are
 in no position to license it to anyone. The SDK it was read out of says as much
@@ -206,8 +212,8 @@ Its authors dedicated it to the public domain under CC0 1.0,
 and on 30 October 2026 it became ours: one set of files, with the entries
 we took out of it named in `removed` and the commit of theirs whose changes
 it has taken named in `upstream`. The MIT licence covers what we wrote and
-the whole as it is put together, and so `split`, `removed`, `upstream` and
-`lang/engb/dictionary` as well. The community's entries in it were given to
+the whole as it is put together, and so `split`, `removed`, `upstream`,
+`sayable`, `pieces` and `lang/engb/dictionary` as well. The community's entries in it were given to
 the public domain by their authors and stay free to anyone, whatever this
 file says.
 
@@ -219,6 +225,13 @@ is Copyright 1993 by Carnegie Mellon University, which made its use for any
 research or commercial purpose completely unrestricted and asked only to be
 acknowledged, which this is. Wiktionary decides which of their readings is
 the published one and nothing of Wiktionary is copied.
+
+`sayable` and the body of `pieces` in both Englishes are written by
+tools/module/sayable.py out of Moby's word lists, which Grady Ward placed in
+the public domain with the Pronunciator, and the same 1993 release of CMU's
+dictionary. The way the engine uses them, asking whether English could say a
+word and spelling what it could not, is the way eSpeak NG reads a word it
+does not know; nothing of eSpeak NG's is copied.
 
 Where it came from
 ------------------

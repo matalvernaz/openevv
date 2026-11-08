@@ -24741,7 +24741,6 @@ giemsa	`[.2gi.1Em.0sx]
 gienger	`[.1gIG.0R]
 gierke	`[.1gir.0kx]
 gieseking	`[.1gi.0zX.2kIG]
-gif	`[.1JIf]
 gifford	`[.1gI.0fRd]
 gigabit	`[.1gI.0gx.2bIt]
 gigacasting	`[.1gI.0gx.2kA.0stIG]
@@ -70230,6 +70229,7 @@ monorepo	`[.1ma.0nx.2ri.0po]
 monorepos	`[.1ma.0nx.2ri.0poz]
 matplotlib	`[.1mAt.2plat.2lIb]
 heisenbug	`[.1hY.0zXn.2bHg]
+vue	`[.1vyu]
 
 # What a program is written in
 async	`[.1e.2sIGk]
@@ -70402,11 +70402,15 @@ ratio	`[.1re.0Si.2o]
 heisenberg	`[.1hY.0zXn.2bRg]
 etc	`[.2Et.1sE.0Fx.0rx]
 
-# Names shortened out of words that turn up in paths, said by their letters
-# as main.dic's are; they are here because only a root entry is found after
-# a slash, as in /usr/bin
+# Names that turn up in paths, said as main.dic says them; they are here
+# because only a root entry is found after a slash, as in /usr/bin and
+# /etc/nixos, or in front of a digit, as in utf8 and tty1
 usr	`[.1yu.2Es.2ar]
 passwd	`[.1pAs.2dH.0bxl.2yu.2di]
+sys	`[.1sIs]
+nixos	`[.2nIks.2o.1Es]
+tty	`[.2ti.2ti.1wY]
+utf	`[.2yu.2ti.1Ef]
 
 # Words spelled with ñ that the community wrote only under plain n, which is
 # what they were found as while the normaliser wrote n for ñ; it writes n
@@ -70416,3 +70420,7 @@ piñon	`[.1pIn.2yon]
 quiñones	`[.0kX.1nyo.0nXs]
 señorita	`[.2se.0nyx.1ri.0Fx]
 vargueño	`[.0var.1gen.0yo]
+
+# Names said as the documented form of the name is, where the bearer has
+# published none: Troughton as Wikipedia gives it for Patrick Troughton
+troughton	`[.1trW.0txn]
