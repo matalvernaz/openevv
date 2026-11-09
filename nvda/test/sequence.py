@@ -85,15 +85,6 @@ class _ParameterInfo:
         self.displayName = displayName if displayName is not None else id
 
 
-class _Conf(dict):
-    """config.conf: read like a dict, and keeping NVDA's list of profiles with
-    the normal configuration first, as config/__init__.py does."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.profiles = [{}]
-
-
 class _Notifier:
     def __init__(self):
         self.seen = []
@@ -155,15 +146,6 @@ class _SynthDriver:
     def VolumeSetting(cls, minStep=1):
         return _Setting("volume")
 
-    def initSettings(self):
-        """Where NVDA hands back the saved settings; none are saved here."""
-
-    def loadSettings(self, onlyChanged=False):
-        """NVDA handing the saved settings back again; none are saved here."""
-
-    def saveSettings(self):
-        """NVDA writing every setting into its configuration; nowhere here."""
-
     # These two are NVDA's own arithmetic, copied so the numbers this test
     # sees are the numbers NVDA would produce.
     def _percentToParam(self, percent, min, max):
@@ -224,7 +206,7 @@ def _install_stubs():
         sys.modules[name] = m
         return m
 
-    module("config", conf=_Conf({"audio": {"outputDevice": "default"}}))
+    module("config", conf={"audio": {"outputDevice": "default"}})
     module("globalVars", appArgs=types.SimpleNamespace(configPath=CONFIG))
     module("addonHandler", getAvailableAddons=lambda: list(ADDONS))
     module("nvwave", WavePlayer=object)
@@ -384,11 +366,7 @@ def driver():
     _openevv = engine_module
 
     engine_module.Engine = FakeEngine
-    # NVDA makes a driver and then hands it its saved settings, and the driver
-    # reads its dictionaries only once it has them.
-    d = driver_module.SynthDriver()
-    d.initSettings()
-    return d
+    return driver_module.SynthDriver()
 
 
 # ---- the checks ------------------------------------------------------------
